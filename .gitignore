@@ -1,0 +1,36 @@
+# Runtime / banco de dados
+*.db
+*.db-wal
+*.db-shm
+
+# Dependências
+node_modules/
+bun.lock
+bun.lockb
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Claude Code — configurações locais e diretrizes pessoais
+.claude/settings.local.json
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+.idea/
+
+# Build / dist (quando aplicável)
+dist/
+build/
+.next/
+out/
+
+# Cobertura de testes
+coverage/

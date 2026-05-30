@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>ATHENAS PDV · Render</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=block"
+    rel="stylesheet"
+  />
+  <style>
+    html, body { margin:0; padding:0; background: transparent; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    #stage { display: inline-block; }
+  </style>
+</head>
+<body data-ready="0">
+  <div id="stage"></div>
+
+  <script>
+    window.renderAsset = async function ({ file, width = 2400, bg = 'transparent' }) {
+      document.body.dataset.ready = '0';
+      const stage = document.getElementById('stage');
+      document.body.style.background = bg;
+      const res = await fetch(file);
+      const svgText = await res.text();
+      stage.innerHTML = svgText;
+      const svg = stage.querySelector('svg');
+      if (svg) {
+        svg.setAttribute('width', width);
+        svg.removeAttribute('height');
+        svg.style.display = 'block';
+      }
+      await document.fonts.ready;
+      // small delay to ensure paint
+      await new Promise(r => setTimeout(r, 100));
+      document.body.dataset.ready = '1';
+    };
+
+    // Sinaliza pronto inicial após fontes carregarem
+    document.fonts.ready.then(() => {
+      if (document.body.dataset.ready === '0') document.body.dataset.ready = '1';
+    });
+  </script>
+</body>
+</html>

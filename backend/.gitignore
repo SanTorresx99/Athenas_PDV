@@ -1,0 +1,8 @@
+node_modules/
+athenas.db
+athenas.db-wal
+athenas.db-shm
+*.db
+.env
+.env.local
+bun.lockb
