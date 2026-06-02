@@ -46,7 +46,12 @@ Prioridade: P1 (crítico MVP) → P2 (importante) → P3 (desejável) → P4 (fu
 | PDV-04 | Cancelamento de venda (com estorno de estoque) | P1 | 01 |
 | PDV-05 | Geração de recibo não-fiscal (exibição na tela) | P1 | 01 |
 | PDV-06 | Interface React do caixa | P1 | 01 |
-| PDV-07 | Histórico de vendas do dia | P2 | 01 |
+| PDV-07 | Histórico de vendas do dia com paginação e reimpressão | P2 | 01 |
+| PDV-12 | Abertura de caixa com fundo de troco | P1 | 01 |
+| PDV-13 | Fechamento de caixa com acerto (contagem física vs. esperado) | P1 | 01 |
+| PDV-14 | Sangria (retirada de numerário durante o turno) | P1 | 01 |
+| PDV-15 | Desconto por item no PDV (campo inline no carrinho) | P2 | 01 |
+| PDV-16 | Suporte a leitor de código de barras (Enter com código exato) | P2 | 01 |
 | PDV-08 | Impressão térmica 80mm | P2 | 02 |
 | PDV-09 | Geração de PDF do recibo | P2 | 02 |
 | PDV-10 | Controle de fiado (requer módulo Clientes) | P3 | 02 |

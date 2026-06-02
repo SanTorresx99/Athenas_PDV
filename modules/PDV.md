@@ -149,6 +149,24 @@ Formatos: exibição na tela (MVP) → impressão térmica 80mm (Sprint 02) → 
 
 ---
 
+## Gestão de Caixa
+
+### Abertura
+- Operador informa fundo de troco (pode ser zero)
+- Sistema registra hora de abertura e fundo; libera frente de venda
+
+### Sangria
+- Retirada de numerário durante o turno (envio para cofre, pagamento de despesa)
+- Registrada com valor, motivo e horário; deduzida do cálculo de acerto
+
+### Fechamento / Acerto
+- Exibe resumo do turno: vendas, faturado, troco devolvido, sangrias
+- Calcula **esperado no caixa** = fundo + faturado − troco − sangrias
+- Operador pode informar contagem física para calcular diferença (sobra/falta)
+- Confirmar fechamento encerra o turno e retorna à tela de abertura
+
+---
+
 ## Endpoints API (Hub)
 
 ```

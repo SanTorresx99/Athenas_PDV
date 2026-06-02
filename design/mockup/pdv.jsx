@@ -16,11 +16,44 @@ function PDV({ tweaks }) {
   const [saving, setSaving] = useP(false);
   const [recentSales, setRecentSales] = useP([]);
   const [saleHistory, setSaleHistory] = useP(() => new Map());
+  const [caixaStage, setCaixaStage] = useP('fechado'); // 'fechado' | 'operando'
+  const [caixaInfo, setCaixaInfo] = useP({
+    fundo: 0,
+    abertoEm: null,
+    operador: { nome: '', codigo: '' },   // quem abriu o caixa
+    sangrias: [],                          // [{valor, motivo, ts, autorizador}]
+  });
+  const [showFechamento, setShowFechamento] = useP(false);
+  const [showSangria, setShowSangria] = useP(false);
+  const [cancelandoId, setCancelandoId] = useP(null); // vendaId sendo cancelada
   const inputRef = useR(null);
+
+  const CAIXA_KEY = 'athenas_caixa_sessao';
+
+  function saveCaixaLocal(info) {
+    try { localStorage.setItem(CAIXA_KEY, JSON.stringify(info)); } catch (_) {}
+  }
+  function clearCaixaLocal() {
+    try { localStorage.removeItem(CAIXA_KEY); } catch (_) {}
+  }
 
   function loadRecentSales() {
     window.api.get('/api/venda/dia').then(v => setRecentSales(v)).catch(() => {});
   }
+
+  // Restaura sessão do caixa ao montar o PDV
+  useE(() => {
+    try {
+      const raw = localStorage.getItem(CAIXA_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        parsed.abertoEm = parsed.abertoEm ? new Date(parsed.abertoEm) : null;
+        parsed.sangrias = (parsed.sangrias || []).map(s => ({ ...s, ts: new Date(s.ts) }));
+        setCaixaInfo(parsed);
+        setCaixaStage('operando');
+      }
+    } catch (_) {}
+  }, []);
 
   useE(() => {
     Promise.all([
@@ -61,7 +94,9 @@ function PDV({ tweaks }) {
   }, [query, cat, products]);
 
   const subtotal = cart.reduce((s, it) => s + it.p * it.q, 0);
-  const discountValue = (subtotal * discount) / 100;
+  const itemDiscountTotal = cart.reduce((s, it) => s + (it.d || 0), 0);
+  const orderDiscountValue = ((subtotal - itemDiscountTotal) * discount) / 100;
+  const discountValue = itemDiscountTotal + orderDiscountValue;
   const total = Math.max(0, subtotal - discountValue);
   const itemCount = cart.reduce((s, it) => s + it.q, 0);
 
@@ -69,20 +104,28 @@ function PDV({ tweaks }) {
     setCart(c => {
       const ex = c.find(i => i.sku === prod.sku);
       if (ex) return c.map(i => i.sku === prod.sku ? { ...i, q: i.q + 1 } : i);
-      return [...c, { ...prod, q: 1 }];
+      return [...c, { ...prod, q: 1, d: 0 }];
     });
   }
   function setQty(sku, q) {
     if (q <= 0) return setCart(c => c.filter(i => i.sku !== sku));
     setCart(c => c.map(i => i.sku === sku ? { ...i, q } : i));
   }
+  function setItemDiscount(sku, d) {
+    setCart(c => c.map(i => i.sku === sku ? { ...i, d: Math.max(0, Math.min(d, i.p * i.q)) } : i));
+  }
   function removeItem(sku) { setCart(c => c.filter(i => i.sku !== sku)); }
   function clearAll() { setCart([]); setDiscount(0); }
 
-  // Quick-search: hit Enter on a single-result search to add it
+  // Barcode scanner: Enter adds exact code match directly; falls back to single filtered result
   function onSearchKey(e) {
-    if (e.key === 'Enter' && filtered.length === 1) {
-      addToCart(filtered[0]); setQuery(''); inputRef.current?.focus();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = query.trim();
+      if (!q) return;
+      const exactMatch = products.find(p => p.sku === q);
+      if (exactMatch) { addToCart(exactMatch); setQuery(''); inputRef.current?.focus(); return; }
+      if (filtered.length === 1) { addToCart(filtered[0]); setQuery(''); inputRef.current?.focus(); }
     }
     if (e.key === 'Escape') setQuery('');
   }
@@ -91,10 +134,12 @@ function PDV({ tweaks }) {
     setSaving(true);
     try {
       const result = await window.api.post('/api/venda', {
-        itens: cart.map(i => ({ produto_id: i.id, quantidade: i.q })),
+        itens: cart.map(i => ({ produto_id: i.id, quantidade: i.q, desconto: i.d || 0 })),
         pagamentos,
-        desconto: discountValue,
+        desconto: orderDiscountValue,
         troco,
+        operador_id: caixaInfo.operador?.nome || null,
+        dispositivo_id: caixaInfo.sessaoId || null,
       });
       const saleData = {
         id: `V-${String(result.numero).padStart(4, '0')}`,
@@ -116,6 +161,68 @@ function PDV({ tweaks }) {
   function newSale() {
     setCart([]); setDiscount(0); setStage('shop');
     setQuery(''); inputRef.current?.focus();
+  }
+
+  async function handleAbrirCaixa(fundo, operador) {
+    const info = { fundo, abertoEm: new Date(), operador, sessaoId: null, sangrias: [] };
+    try {
+      const res = await window.api.post('/api/caixa/abrir', {
+        operador_nome: operador.nome,
+        operador_codigo: operador.codigo || null,
+        fundo_inicial: fundo,
+      });
+      info.sessaoId = res.id;
+    } catch (_) {}
+    setCaixaInfo(info);
+    saveCaixaLocal(info);
+    setCaixaStage('operando');
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }
+
+  async function handleFecharCaixa(autorizador) {
+    if (caixaInfo.sessaoId) {
+      try {
+        await window.api.post(`/api/caixa/${caixaInfo.sessaoId}/fechar`, {
+          supervisor_nome: autorizador.nome,
+          supervisor_codigo: autorizador.codigo || null,
+        });
+      } catch (_) {}
+    }
+    clearCaixaLocal();
+    setShowFechamento(false);
+    setCaixaStage('fechado');
+    clearAll();
+    loadRecentSales();
+  }
+
+  async function handleSangria(valor, motivo, autorizador) {
+    const entry = { valor, motivo, ts: new Date(), autorizador };
+    if (caixaInfo.sessaoId) {
+      try {
+        await window.api.post(`/api/caixa/${caixaInfo.sessaoId}/sangria`, {
+          valor,
+          motivo: motivo || null,
+          supervisor_nome: autorizador.nome,
+          supervisor_codigo: autorizador.codigo || null,
+        });
+      } catch (_) {}
+    }
+    setCaixaInfo(ci => {
+      const updated = { ...ci, sangrias: [...ci.sangrias, entry] };
+      saveCaixaLocal(updated);
+      return updated;
+    });
+    setShowSangria(false);
+  }
+
+  async function handleCancelarVenda(vendaId, motivo, autorizador) {
+    try {
+      await window.api.post(`/api/venda/${vendaId}/cancelar`, { motivo, autorizador });
+      loadRecentSales();
+      setCancelandoId(null);
+    } catch (err) {
+      alert('Erro ao cancelar venda: ' + err.message);
+    }
   }
 
   async function handleReprint(vendaId) {
@@ -148,6 +255,16 @@ function PDV({ tweaks }) {
     }
   }
 
+  if (caixaStage === 'fechado') {
+    return (
+      <CaixaAberturaScreen
+        onAbrir={handleAbrirCaixa}
+        caixaInfo={caixaInfo}
+        recentSales={recentSales}
+      />
+    );
+  }
+
   return (
     <div style={{
       display: 'grid', gridTemplateColumns: '1fr 420px', gap: 0,
@@ -155,6 +272,36 @@ function PDV({ tweaks }) {
     }}>
       {/* LEFT — products */}
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: 20, gap: 12 }}>
+        {/* Caixa status bar */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '6px 10px', borderRadius: 8,
+                      background: 'var(--success-soft)', border: '1px solid var(--success)',
+                      fontSize: 11.5 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', color: 'var(--success)', fontWeight: 600 }}>
+            <Icon name="check" size={13} stroke={2.4} />
+            Caixa aberto · fundo R$ {caixaInfo.fundo.toFixed(2).replace('.',',')}
+            {caixaInfo.abertoEm && (
+              <span style={{ fontWeight: 400, color: 'var(--muted)' }}>
+                · desde {caixaInfo.abertoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            {caixaInfo.operador?.nome && (
+              <span style={{ fontWeight: 500, color: 'var(--muted)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                · <Icon name="user" size={11} /> {caixaInfo.operador.nome}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setShowSangria(true)} className="a-btn a-btn-ghost"
+                    style={{ height: 28, padding: '0 10px', fontSize: 11.5 }}>
+              <Icon name="arrow-down" size={12} /> Sangria
+            </button>
+            <button onClick={() => setShowFechamento(true)} className="a-btn"
+                    style={{ height: 28, padding: '0 10px', fontSize: 11.5 }}>
+              <Icon name="close" size={12} /> Fechar caixa
+            </button>
+          </div>
+        </div>
         {/* Search bar */}
         <div style={{ display: 'flex', gap: 8 }}>
           <div style={{ position: 'relative', flex: 1 }}>
@@ -238,6 +385,8 @@ function PDV({ tweaks }) {
         onCheckout={() => cart.length > 0 && setStage('pay')}
         recentSales={recentSales}
         onReprint={handleReprint}
+        setItemDiscount={setItemDiscount}
+        onCancelar={(id) => setCancelandoId(id)}
       />
 
       {/* PAYMENT MODAL */}
@@ -258,6 +407,31 @@ function PDV({ tweaks }) {
       {/* REPRINT MODAL */}
       {reprinting && (
         <ReceiptModal sale={reprinting} onClose={() => setReprinting(null)} reprint />
+      )}
+
+      {/* SANGRIA MODAL */}
+      {showSangria && (
+        <SangriaModal onConfirmar={handleSangria} onCancelar={() => setShowSangria(false)} />
+      )}
+
+      {/* FECHAMENTO MODAL */}
+      {showFechamento && (
+        <CaixaFechamentoModal
+          caixaInfo={caixaInfo}
+          recentSales={recentSales}
+          onConfirmar={handleFecharCaixa}
+          onCancelar={() => setShowFechamento(false)}
+        />
+      )}
+
+      {/* CANCELAMENTO DE VENDA */}
+      {cancelandoId && (
+        <CancelVendaModal
+          vendaId={cancelandoId}
+          venda={recentSales.find(v => v.id === cancelandoId)}
+          onConfirmar={handleCancelarVenda}
+          onCancelar={() => setCancelandoId(null)}
+        />
       )}
     </div>
   );
@@ -311,8 +485,12 @@ function ProductTile({ p, onAdd }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 function CartPanel({ cart, subtotal, discount, setDiscount, discountValue, total, itemCount,
-                     setQty, removeItem, clearAll, onCheckout, recentSales, onReprint }) {
+                     setQty, removeItem, clearAll, onCheckout, recentSales, onReprint, setItemDiscount, onCancelar }) {
   const [page, setPage] = useP(0);
+  const [discEditing, setDiscEditing] = useP(null);
+  const [discInput, setDiscInput] = useP('');
+  const [qtyEditing, setQtyEditing] = useP(null); // sku com qty em edição
+  const [qtyInput, setQtyInput] = useP('');
   const PAGE_SIZE = 10;
   const totalPages = Math.ceil(recentSales.length / PAGE_SIZE);
   const pagedSales = recentSales.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -354,36 +532,120 @@ function CartPanel({ cart, subtotal, discount, setDiscount, discountValue, total
         <div style={{ padding: cart.length > 0 ? '8px 12px' : '0 12px' }}>
           {cart.map(it => (
             <div key={it.sku} style={{
-              padding: '10px 8px', borderRadius: 8,
-              display: 'grid', gridTemplateColumns: '1fr auto', gap: 8,
+              padding: '8px 8px 6px', borderRadius: 8,
               transition: 'background .12s ease',
             }}
             onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface-2)'}
             onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden',
-                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.n}</div>
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                  R$ {it.p.toFixed(2).replace('.',',')} · un.
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden',
+                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.n}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    R$ {it.p.toFixed(2).replace('.',',')} · un.
+                    {it.d > 0 && (
+                      <span style={{ color: 'var(--accent)', fontWeight: 700 }}>
+                        − R$ {it.d.toFixed(2).replace('.',',')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    onClick={() => { setDiscEditing(it.sku); setDiscInput(it.d > 0 ? it.d.toFixed(2) : ''); }}
+                    title="Desconto por item"
+                    style={{
+                      width: 22, height: 22, borderRadius: 5, fontFamily: 'inherit',
+                      border: '1px solid', fontSize: 10, fontWeight: 800, cursor: 'default',
+                      display: 'grid', placeItems: 'center',
+                      borderColor: it.d > 0 ? 'var(--accent)' : 'var(--border)',
+                      background: it.d > 0 ? 'var(--accent-soft)' : 'transparent',
+                      color: it.d > 0 ? 'var(--accent)' : 'var(--muted-2)',
+                    }}>%</button>
+                  <div style={{ display: 'flex', alignItems: 'center',
+                                background: 'var(--surface-2)', borderRadius: 7,
+                                border: '1px solid var(--border)' }}>
+                    <button onClick={() => setQty(it.sku, it.q - 1)} style={qtyBtn}>
+                      <Icon name="minus" size={11} stroke={2.4} />
+                    </button>
+                    {qtyEditing === it.sku ? (
+                      <input
+                        autoFocus
+                        type="number" min="1"
+                        value={qtyInput}
+                        onChange={e => setQtyInput(e.target.value)}
+                        onFocus={e => e.target.select()}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            const v = Math.max(1, parseInt(qtyInput) || 1);
+                            setQty(it.sku, v);
+                            setQtyEditing(null);
+                          }
+                          if (e.key === 'Escape') setQtyEditing(null);
+                        }}
+                        onBlur={() => {
+                          const v = Math.max(1, parseInt(qtyInput) || 1);
+                          setQty(it.sku, v);
+                          setQtyEditing(null);
+                        }}
+                        style={{
+                          width: 44, textAlign: 'center', fontSize: 13, fontWeight: 700,
+                          border: 'none', background: 'var(--primary-soft)',
+                          color: 'var(--primary)', outline: 'none',
+                          fontFamily: 'var(--font-mono)', padding: '0 2px',
+                          MozAppearance: 'textfield',
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="a-num"
+                        onClick={() => { setQtyEditing(it.sku); setQtyInput(String(it.q)); }}
+                        title="Clique para editar quantidade"
+                        style={{
+                          width: 28, textAlign: 'center', fontSize: 13, fontWeight: 600,
+                          cursor: 'text', borderRadius: 4,
+                          transition: 'background .1s',
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--primary-soft)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      >{it.q}</span>
+                    )}
+                    <button onClick={() => setQty(it.sku, it.q + 1)} style={qtyBtn}>
+                      <Icon name="plus" size={11} stroke={2.4} />
+                    </button>
+                  </div>
+                  <div className="a-num" style={{ minWidth: 68, textAlign: 'right', fontSize: 13.5, fontWeight: 700 }}>
+                    R$ {(it.p * it.q - (it.d || 0)).toFixed(2).replace('.',',')}
+                  </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center',
-                              background: 'var(--surface-2)', borderRadius: 7,
-                              border: '1px solid var(--border)' }}>
-                  <button onClick={() => setQty(it.sku, it.q - 1)} style={qtyBtn}>
-                    <Icon name="minus" size={11} stroke={2.4} />
-                  </button>
-                  <span className="a-num" style={{ width: 24, textAlign: 'center', fontSize: 13, fontWeight: 600 }}>{it.q}</span>
-                  <button onClick={() => setQty(it.sku, it.q + 1)} style={qtyBtn}>
-                    <Icon name="plus" size={11} stroke={2.4} />
+              {/* Inline discount editor */}
+              {discEditing === it.sku && (
+                <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Desc R$</span>
+                  <input
+                    autoFocus
+                    type="number" min="0" step="0.01"
+                    value={discInput}
+                    onChange={e => setDiscInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === 'Tab') {
+                        setItemDiscount(it.sku, parseFloat(discInput.replace(',','.')) || 0);
+                        setDiscEditing(null);
+                      }
+                      if (e.key === 'Escape') { setDiscEditing(null); }
+                    }}
+                    onBlur={() => { setItemDiscount(it.sku, parseFloat(discInput.replace(',','.')) || 0); setDiscEditing(null); }}
+                    className="a-input"
+                    style={{ flex: 1, height: 28, fontSize: 12.5, padding: '0 8px' }}
+                  />
+                  <button onClick={() => { setItemDiscount(it.sku, 0); setDiscEditing(null); }}
+                          className="a-btn a-btn-ghost" style={{ height: 28, padding: '0 8px', fontSize: 11 }}>
+                    Zerar
                   </button>
                 </div>
-                <div className="a-num" style={{ minWidth: 72, textAlign: 'right', fontSize: 13.5, fontWeight: 700 }}>
-                  R$ {(it.p * it.q).toFixed(2).replace('.',',')}
-                </div>
-              </div>
+              )}
             </div>
           ))}
         </div>
@@ -433,11 +695,15 @@ function CartPanel({ cart, subtotal, discount, setDiscount, discountValue, total
           </button>
 
           <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-            <button className="a-btn a-btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}>
+            <button className="a-btn a-btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
+                    title="Em breve">
               <Icon name="clock" size={13} /> Salvar
             </button>
-            <button className="a-btn a-btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}>
-              Cancelar
+            <button onClick={clearAll} className="a-btn a-btn-ghost"
+                    style={{ flex: 1, justifyContent: 'center', fontSize: 12,
+                             color: cart.length > 0 ? 'var(--danger)' : 'var(--muted-2)' }}
+                    disabled={cart.length === 0}>
+              <Icon name="close" size={13} stroke={2} /> Cancelar
             </button>
           </div>
         </div>
@@ -512,6 +778,15 @@ function CartPanel({ cart, subtotal, discount, setDiscount, discountValue, total
                           onMouseEnter={e => { e.currentTarget.style.background = 'var(--primary-soft)'; e.currentTarget.style.color = 'var(--primary)'; }}
                           onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted-2)'; }}>
                     <Icon name="arrow-down" size={13} stroke={2} />
+                  </button>
+                  <button onClick={() => onCancelar(v.id)} title="Cancelar venda"
+                          style={{ width: 24, height: 24, border: 'none', background: 'transparent',
+                                   color: 'var(--muted-2)', cursor: 'default', display: 'grid',
+                                   placeItems: 'center', borderRadius: 5, fontFamily: 'inherit',
+                                   transition: 'background .1s, color .1s' }}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--danger-soft)'; e.currentTarget.style.color = 'var(--danger)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted-2)'; }}>
+                    <Icon name="close" size={12} stroke={2.2} />
                   </button>
                 </div>
               </div>
@@ -758,6 +1033,60 @@ function ReceiptModal({ sale, onClose, reprint = false }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  function sendWhatsApp() {
+    const dt = sale.ts.toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+    const sep = '━━━━━━━━━━━━━━━━━━━━━';
+
+    const itensLines = sale.items.map(it => {
+      const net = (it.p * it.q - (it.d || 0)).toFixed(2).replace('.', ',');
+      const nome = it.n.length > 24 ? it.n.slice(0, 22) + '…' : it.n;
+      return `  ${it.q}× ${nome}  R$ ${net}`;
+    }).join('\n');
+
+    const pagsLines = (sale.pagamentos || []).map(pg =>
+      `  💳 ${formaLabel(pg.forma)}  R$ ${pg.valor.toFixed(2).replace('.', ',')}`
+    ).join('\n');
+
+    const descontoLine = sale.discountValue > 0
+      ? `  Desconto     −R$ ${sale.discountValue.toFixed(2).replace('.', ',')}\n`
+      : '';
+
+    const trocoLine = sale.troco > 0
+      ? `  Troco         R$ ${sale.troco.toFixed(2).replace('.', ',')}\n`
+      : '';
+
+    const lines = [
+      `🏛️ *ATHENAS PDV* · Bom Preço · Centro`,
+      sep,
+      `🧾 *${sale.id}* · ${dt}`,
+      sep,
+      itensLines,
+      sep,
+      `  Subtotal      R$ ${sale.subtotal.toFixed(2).replace('.', ',')}`,
+      descontoLine.trim() || null,
+      `  *TOTAL        R$ ${sale.total.toFixed(2).replace('.', ',')}*`,
+      ``,
+      pagsLines,
+      trocoLine.trim() || null,
+      sep,
+      `Obrigado pela preferência! 🙏`,
+      `_ATHENAS PDV · Sistema de gestão_`,
+    ].filter(l => l !== null).join('\n');
+
+    // whatsapp:// abre o app desktop; fallback para web se não instalado
+    const encoded = encodeURIComponent(lines);
+    const appUrl = `whatsapp://send?text=${encoded}`;
+    const webUrl = `https://web.whatsapp.com/send?text=${encoded}`;
+    const a = document.createElement('a');
+    a.href = appUrl;
+    a.click();
+    // fallback: se o protocolo não abrir em 1.5s, abre no browser
+    setTimeout(() => { if (document.hasFocus()) window.open(webUrl, '_blank', 'noopener'); }, 1500);
+  }
+
   function printReceipt() {
     // symbol-black.svg embutido inline (fiel ao arquivo original do brand-kit)
     const symbolSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 300" style="width:40px;height:50px;display:block;margin:0 auto 5px">
@@ -949,8 +1278,10 @@ ${sale.troco > 0 ? `<div class="row sm"><span>Troco</span><span>R$&nbsp;${sale.t
           <button onClick={printReceipt} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>
             <Icon name="arrow-down" size={14} /> Imprimir
           </button>
-          <button className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>
-            Enviar por Pix
+          <button onClick={sendWhatsApp} className="a-btn"
+                  style={{ flex: 1, justifyContent: 'center', color: '#25D366',
+                           borderColor: 'rgba(37,211,102,.35)', background: 'rgba(37,211,102,.08)' }}>
+            <Icon name="whatsapp" size={14} /> WhatsApp
           </button>
           <button onClick={onClose} className="a-btn a-btn-primary" style={{ flex: 1.4, justifyContent: 'center' }}>
             Nova venda
@@ -964,6 +1295,468 @@ ${sale.troco > 0 ? `<div class="row sm"><span>Troco</span><span>R$&nbsp;${sale.t
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Componente reutilizável de autorização — estrutura para futura integração com usuários
+function SupervisorAuth({ label, value, onChange }) {
+  return (
+    <div style={{
+      marginTop: 14, padding: '12px 14px', borderRadius: 10,
+      border: '1px solid var(--border)', background: 'var(--surface-3)',
+    }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)',
+                    textTransform: 'uppercase', letterSpacing: '.08em',
+                    marginBottom: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <Icon name="user" size={12} stroke={2} /> {label || 'Autorização'}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <input
+          type="text"
+          placeholder="Nome do supervisor *"
+          value={value.nome}
+          onChange={e => onChange({ ...value, nome: e.target.value })}
+          className="a-input"
+          style={{ height: 36, fontSize: 12.5 }}
+        />
+        <input
+          type="password"
+          placeholder="Código / PIN"
+          value={value.codigo}
+          onChange={e => onChange({ ...value, codigo: e.target.value })}
+          className="a-input"
+          style={{ height: 36, fontSize: 12.5 }}
+        />
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--muted-2)', marginTop: 6, lineHeight: 1.4 }}>
+        Registrado para auditoria · sistema de autenticação em configuração no painel admin
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+function CancelVendaModal({ vendaId, venda, onConfirmar, onCancelar }) {
+  const [motivo, setMotivo] = useP('');
+  const [auth, setAuth] = useP({ nome: '', codigo: '' });
+  const [loading, setLoading] = useP(false);
+  const canConfirm = motivo.trim().length >= 3 && auth.nome.trim().length > 0 && !loading;
+
+  const numero = venda ? `V-${String(venda.numero).padStart(4,'0')}` : vendaId;
+  const total  = venda ? `R$ ${Number(venda.total).toFixed(2).replace('.',',')}` : '—';
+
+  async function confirmar() {
+    setLoading(true);
+    await onConfirmar(vendaId, motivo, auth);
+    setLoading(false);
+  }
+
+  return (
+    <Overlay onClose={onCancelar}>
+      <div className="a-card" style={{ width: 460, padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
+        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--danger)', letterSpacing: '.12em',
+                          textTransform: 'uppercase', fontWeight: 700 }}>Cancelamento</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>Cancelar venda {numero}</div>
+          </div>
+          <button onClick={onCancelar} className="a-btn a-btn-ghost"
+                  style={{ width: 32, height: 32, padding: 0, justifyContent: 'center' }}>
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+
+        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Resumo da venda */}
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--danger-soft)',
+                        border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 700,
+                            textTransform: 'uppercase', letterSpacing: '.06em' }}>Venda a cancelar</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>{numero}</div>
+            </div>
+            <div className="a-num" style={{ fontSize: 20, fontWeight: 700, color: 'var(--danger)' }}>{total}</div>
+          </div>
+
+          <div style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--warning-soft)',
+                        border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+            ⚠️ O estoque dos produtos será estornado automaticamente. Esta ação não pode ser desfeita.
+          </div>
+
+          {/* Motivo */}
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)',
+                            display: 'block', marginBottom: 6 }}>
+              Motivo do cancelamento *
+            </label>
+            <input
+              autoFocus
+              type="text"
+              value={motivo}
+              onChange={e => setMotivo(e.target.value)}
+              placeholder="Ex: erro na digitação, desistência do cliente…"
+              className="a-input"
+            />
+            {motivo.length > 0 && motivo.trim().length < 3 && (
+              <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>Mínimo 3 caracteres</div>
+            )}
+          </div>
+
+          {/* Autorização */}
+          <SupervisorAuth label="Autorização do supervisor" value={auth} onChange={setAuth} />
+        </div>
+
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)',
+                      display: 'flex', gap: 8, background: 'var(--surface-2)' }}>
+          <button onClick={onCancelar} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>
+            Voltar
+          </button>
+          <button onClick={confirmar} disabled={!canConfirm}
+                  style={{
+                    flex: 2, justifyContent: 'center', height: 36, display: 'inline-flex',
+                    alignItems: 'center', gap: 8, padding: '0 16px', borderRadius: 8,
+                    border: '1px solid var(--danger)', background: canConfirm ? 'var(--danger)' : 'var(--danger-soft)',
+                    color: canConfirm ? '#fff' : 'var(--danger)', fontWeight: 700, fontSize: 13,
+                    cursor: 'default', fontFamily: 'inherit', opacity: canConfirm ? 1 : .6,
+                  }}>
+            <Icon name="close" size={15} stroke={2.4} />
+            {loading ? 'Cancelando…' : 'Confirmar cancelamento'}
+          </button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+function CaixaAberturaScreen({ onAbrir, caixaInfo, recentSales }) {
+  const [fundo, setFundo] = useP('');
+  const [opNome, setOpNome] = useP('');
+  const [opCodigo, setOpCodigo] = useP('');
+  const [now, setNow] = useP(new Date());
+  useE(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const canAbrir = opNome.trim().length > 0;
+
+  const totalTurno = recentSales.reduce((s, v) => s + Number(v.total), 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  justifyContent: 'center', height: '100%', background: 'var(--bg)', padding: 40, gap: 20 }}>
+      <LogoLockup variant="pilar" size={28} />
+      <div className="a-card" style={{ width: 420, padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '28px 28px 22px', textAlign: 'center',
+                      background: 'linear-gradient(160deg, var(--primary-soft) 0%, transparent 100%)',
+                      borderBottom: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700,
+                        letterSpacing: '.14em', textTransform: 'uppercase' }}>Abertura de Caixa</div>
+          <div className="a-num" style={{ fontSize: 44, fontWeight: 700, letterSpacing: '-.03em', marginTop: 6 }}>
+            {now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3, textTransform: 'capitalize' }}>
+            {now.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+          </div>
+        </div>
+
+        <div style={{ padding: '22px 28px 0' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', display: 'block',
+                          marginBottom: 8, letterSpacing: '.08em', textTransform: 'uppercase' }}>
+            Fundo de Troco
+          </label>
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)',
+                           fontSize: 15, fontWeight: 600, color: 'var(--muted)' }}>R$</span>
+            <input
+              autoFocus type="number" min="0" step="0.01"
+              value={fundo}
+              onChange={e => setFundo(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') onAbrir(parseFloat(fundo.replace(',','.')) || 0); }}
+              placeholder="0,00"
+              className="a-input"
+              style={{ height: 54, paddingLeft: 40, fontSize: 22, fontWeight: 700, letterSpacing: '-.01em' }}
+            />
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8, lineHeight: 1.4 }}>
+            Valor em dinheiro disponível para troco no início do turno. Pode ser zero.
+          </div>
+        </div>
+
+        {/* Identificação do operador */}
+        <div style={{ padding: '0 28px 16px' }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', display: 'block',
+                          marginBottom: 8, letterSpacing: '.08em', textTransform: 'uppercase' }}>
+            Identificação do Operador
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <input
+              type="text"
+              value={opNome}
+              onChange={e => setOpNome(e.target.value)}
+              placeholder="Seu nome *"
+              className="a-input"
+              style={{ height: 40, fontSize: 13 }}
+            />
+            <input
+              type="password"
+              value={opCodigo}
+              onChange={e => setOpCodigo(e.target.value)}
+              placeholder="Código / PIN"
+              className="a-input"
+              style={{ height: 40, fontSize: 13 }}
+              onKeyDown={e => { if (e.key === 'Enter' && canAbrir) onAbrir(parseFloat(fundo.replace(',','.')) || 0, { nome: opNome.trim(), codigo: opCodigo }); }}
+            />
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--muted-2)', marginTop: 6 }}>
+            Registrado para auditoria · sistema de autenticação em configuração
+          </div>
+        </div>
+
+        {recentSales.length > 0 && (
+          <div style={{ margin: '16px 28px 0', padding: '10px 14px', borderRadius: 10,
+                        background: 'var(--surface-2)', border: '1px solid var(--border)',
+                        display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+            <span style={{ color: 'var(--muted)' }}>Último turno · {recentSales.length} vendas</span>
+            <span className="a-num" style={{ fontWeight: 700 }}>
+              R$ {totalTurno.toFixed(2).replace('.',',')}
+            </span>
+          </div>
+        )}
+
+        <div style={{ padding: '20px 28px 24px' }}>
+          <button
+            onClick={() => onAbrir(parseFloat(fundo.replace(',','.')) || 0, { nome: opNome.trim(), codigo: opCodigo })}
+            disabled={!canAbrir}
+            className="a-btn a-btn-primary"
+            style={{ width: '100%', height: 52, fontSize: 15, justifyContent: 'center', opacity: canAbrir ? 1 : .45 }}>
+            <Icon name="check" size={18} stroke={2.4} /> Abrir Caixa
+          </button>
+          {!canAbrir && (
+            <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: 'var(--warning)', fontWeight: 600 }}>
+              Informe o nome do operador para abrir o caixa
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+function SangriaModal({ onConfirmar, onCancelar }) {
+  const [valor, setValor] = useP('');
+  const [motivo, setMotivo] = useP('');
+  const [auth, setAuth] = useP({ nome: '', codigo: '' });
+  const valorNum = parseFloat(valor.replace(',','.')) || 0;
+  const canConfirm = valorNum > 0 && auth.nome.trim().length > 0;
+  return (
+    <Overlay onClose={onCancelar}>
+      <div className="a-card" style={{ width: 400, padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
+        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', letterSpacing: '.12em',
+                          textTransform: 'uppercase', fontWeight: 700 }}>PDV</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>Retirada (Sangria)</div>
+          </div>
+          <button onClick={onCancelar} className="a-btn a-btn-ghost"
+                  style={{ width: 32, height: 32, padding: 0, justifyContent: 'center' }}>
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)',
+                            display: 'block', marginBottom: 6 }}>Valor da retirada</label>
+            <div style={{ position: 'relative' }}>
+              <span style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)',
+                             fontSize: 15, fontWeight: 600, color: 'var(--muted)' }}>R$</span>
+              <input autoFocus type="number" min="0.01" step="0.01"
+                     value={valor}
+                     onChange={e => setValor(e.target.value)}
+                     onKeyDown={e => { if (e.key === 'Enter' && valorNum > 0) onConfirmar(valorNum, motivo); }}
+                     placeholder="0,00"
+                     className="a-input"
+                     style={{ height: 52, paddingLeft: 40, fontSize: 22, fontWeight: 700 }}
+              />
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)',
+                            display: 'block', marginBottom: 6 }}>
+              Motivo <span style={{ fontWeight: 400 }}>(opcional)</span>
+            </label>
+            <input type="text" value={motivo} onChange={e => setMotivo(e.target.value)}
+                   placeholder="Ex: envio para cofre, pagamento de fornecedor…"
+                   className="a-input" />
+          </div>
+          <SupervisorAuth label="Autorização do supervisor" value={auth} onChange={setAuth} />
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)',
+                      display: 'flex', gap: 8, background: 'var(--surface-2)' }}>
+          <button onClick={onCancelar} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>Cancelar</button>
+          <button onClick={() => canConfirm && onConfirmar(valorNum, motivo, auth)}
+                  disabled={!canConfirm}
+                  className="a-btn a-btn-primary"
+                  style={{ flex: 2, justifyContent: 'center', opacity: canConfirm ? 1 : .45 }}>
+            <Icon name="check" size={16} stroke={2.4} /> Confirmar sangria
+          </button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+function CaixaFechamentoModal({ caixaInfo, recentSales, onConfirmar, onCancelar }) {
+  const [contagem, setContagem] = useP('');
+  const [auth, setAuth] = useP({ nome: '', codigo: '' });
+  const canFechar = auth.nome.trim().length > 0;
+
+  const totalVendas = recentSales.length;
+  const totalFaturado = recentSales.reduce((s, v) => s + Number(v.total), 0);
+  const totalTroco = recentSales.reduce((s, v) => s + Number(v.troco || 0), 0);
+  const totalSangrias = (caixaInfo.sangrias || []).reduce((s, sg) => s + sg.valor, 0);
+  const estimado = caixaInfo.fundo + totalFaturado - totalTroco - totalSangrias;
+
+  const contagemVal = contagem ? parseFloat(contagem.replace(',','.')) : null;
+  const diferenca = contagemVal !== null ? contagemVal - estimado : null;
+
+  const turnoMin = caixaInfo.abertoEm
+    ? Math.round((Date.now() - caixaInfo.abertoEm.getTime()) / 60000)
+    : 0;
+  const turnoStr = turnoMin < 60
+    ? `${turnoMin}min`
+    : `${Math.floor(turnoMin/60)}h ${turnoMin % 60}min`;
+
+  return (
+    <Overlay onClose={onCancelar}>
+      <div className="a-card" style={{ width: 500, padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
+        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', letterSpacing: '.12em',
+                          textTransform: 'uppercase', fontWeight: 700 }}>Fechamento</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>Encerrar turno</div>
+          </div>
+          <button onClick={onCancelar} className="a-btn a-btn-ghost"
+                  style={{ width: 32, height: 32, padding: 0, justifyContent: 'center' }}>
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+
+        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Stats grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+            {[
+              { l: 'Vendas', v: totalVendas },
+              { l: 'Duração', v: turnoStr },
+              { l: 'Faturado', v: `R$ ${totalFaturado.toFixed(2).replace('.',',')}` },
+              { l: 'Sangrias', v: totalSangrias > 0 ? `R$ ${totalSangrias.toFixed(2).replace('.',',')}` : '—' },
+            ].map(s => (
+              <div key={s.l} style={{ padding: '10px 12px', borderRadius: 10,
+                                      background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700,
+                              textTransform: 'uppercase', letterSpacing: '.06em' }}>{s.l}</div>
+                <div className="a-num" style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{s.v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Cash breakdown */}
+          <div style={{ padding: '14px 16px', borderRadius: 10, background: 'var(--surface-2)',
+                        border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase',
+                          letterSpacing: '.08em', marginBottom: 10 }}>Acerto de caixa</div>
+            {[
+              { l: 'Fundo inicial', v: caixaInfo.fundo, neg: false },
+              { l: 'Total faturado', v: totalFaturado, neg: false },
+              { l: 'Troco devolvido', v: totalTroco, neg: true },
+              { l: 'Sangrias', v: totalSangrias, neg: true },
+            ].map(r => (
+              <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between',
+                                      padding: '3px 0', fontSize: 12.5, color: 'var(--text-2)' }}>
+                <span>{r.l}</span>
+                <span className="a-num" style={{ fontWeight: 600 }}>
+                  {r.neg ? '−' : '+'}R$ {r.v.toFixed(2).replace('.',',')}
+                </span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                          marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)',
+                          fontSize: 14, fontWeight: 700 }}>
+              <span>Esperado no caixa</span>
+              <span className="a-num">R$ {estimado.toFixed(2).replace('.',',')}</span>
+            </div>
+          </div>
+
+          {/* Physical count */}
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: 6 }}>
+              Contagem física <span style={{ fontWeight: 400 }}>(opcional)</span>
+            </label>
+            <div style={{ position: 'relative' }}>
+              <span style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)',
+                             fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>R$</span>
+              <input type="number" min="0" step="0.01"
+                     value={contagem}
+                     onChange={e => setContagem(e.target.value)}
+                     placeholder={estimado.toFixed(2).replace('.',',')}
+                     className="a-input"
+                     style={{ paddingLeft: 36 }}
+              />
+            </div>
+            {diferenca !== null && (
+              <div style={{ marginTop: 6, fontSize: 13, fontWeight: 700,
+                            color: Math.abs(diferenca) < 0.01
+                              ? 'var(--success)'
+                              : diferenca < 0 ? 'var(--danger)' : 'var(--warning)' }}>
+                {Math.abs(diferenca) < 0.01
+                  ? '✓ Caixa conferido — sem diferença'
+                  : diferenca < 0
+                    ? `Faltam R$ ${Math.abs(diferenca).toFixed(2).replace('.',',')} no caixa`
+                    : `Sobram R$ ${diferenca.toFixed(2).replace('.',',')} no caixa`}
+              </div>
+            )}
+          </div>
+
+          <SupervisorAuth label="Autorização do supervisor para fechamento" value={auth} onChange={setAuth} />
+
+          {/* Sangrias list */}
+          {caixaInfo.sangrias && caixaInfo.sangrias.length > 0 && (
+            <div style={{ padding: '10px 14px', borderRadius: 10,
+                          background: 'var(--warning-soft)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warning)',
+                            textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>
+                Sangrias do turno
+              </div>
+              {caixaInfo.sangrias.map((sg, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between',
+                                      fontSize: 12, color: 'var(--text-2)', padding: '2px 0' }}>
+                  <span>{sg.motivo || 'Sem descrição'} · {sg.ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="a-num" style={{ fontWeight: 700 }}>−R$ {sg.valor.toFixed(2).replace('.',',')}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)',
+                      display: 'flex', gap: 8, background: 'var(--surface-2)' }}>
+          <button onClick={onCancelar} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>Cancelar</button>
+          <button onClick={() => canFechar && onConfirmar(auth)}
+                  disabled={!canFechar}
+                  className="a-btn a-btn-primary"
+                  style={{ flex: 2, justifyContent: 'center', opacity: canFechar ? 1 : .45 }}>
+            <Icon name="check" size={16} stroke={2.4} /> Confirmar fechamento
+          </button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 function Row({ l, v, muted, accent }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between',

@@ -7,6 +7,7 @@ import { estoqueRoutes }   from './routes/estoque'
 import { comprasRoutes }   from './routes/compras'
 import { licencaRoutes }   from './routes/licenca'
 import { dashboardRoutes } from './routes/dashboard'
+import { caixaRoutes }     from './routes/caixa'
 import { authMiddleware }  from './middleware/auth'
 import { runMigrations }   from './db/migrate'
 import { seedIfEmpty }     from './db/seed'
@@ -39,6 +40,7 @@ app.route('/api/estoque',   estoqueRoutes)
 app.route('/api/compras',   comprasRoutes)
 app.route('/api/licenca',   licencaRoutes)
 app.route('/api/dashboard', dashboardRoutes)
+app.route('/api/caixa',     caixaRoutes)
 
 // 404
 app.notFound((c) => c.json({ erro: 'Rota não encontrada' }, 404))

@@ -63,8 +63,8 @@ function logStatusLicenca(licenca: Licenca) {
 
 export function aplicarToken(token: string): { ok: boolean; mensagem: string } {
   // Formato: ATHENAS-{base64url_payload}-{hmac_8chars}
-  const partes = token.toUpperCase().split('-')
-  if (partes.length !== 3 || partes[0] !== 'ATHENAS') {
+  const partes = token.split('-')
+  if (partes.length !== 3 || partes[0].toUpperCase() !== 'ATHENAS') {
     return { ok: false, mensagem: 'Token inválido' }
   }
 

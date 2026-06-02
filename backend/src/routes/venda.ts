@@ -133,9 +133,12 @@ vendaRoutes.get('/:id', (c) => {
   return c.json({ ...venda, itens })
 })
 
-// POST /api/venda/:id/cancelar — cancelar venda
-vendaRoutes.post('/:id/cancelar', (c) => {
+// POST /api/venda/:id/cancelar — cancelar venda (aceita motivo e autorizador para auditoria)
+vendaRoutes.post('/:id/cancelar', async (c) => {
   const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+  const motivo = (body.motivo as string) || null
+  const autorizador = body.autorizador ? JSON.stringify(body.autorizador) : null
 
   const venda = db.query<{ status: string }, [string]>('SELECT status FROM venda WHERE id = ?').get(id)
   if (!venda) return c.json({ erro: 'Venda não encontrada' }, 404)
@@ -157,7 +160,9 @@ vendaRoutes.post('/:id/cancelar', (c) => {
       insertMov.run(crypto.randomUUID(), item.produto_id, item.quantidade, saldoApos, id)
     }
 
-    db.prepare(`UPDATE venda SET status = 'cancelada' WHERE id = ?`).run(id)
+    db.prepare(`
+      UPDATE venda SET status = 'cancelada', observacao = COALESCE(?, observacao) WHERE id = ?
+    `).run(motivo ? `[CANCELADO] ${motivo}${autorizador ? ` | auth:${autorizador}` : ''}` : null, id)
   })()
 
   return c.json({ mensagem: 'Venda cancelada e estoque estornado' })

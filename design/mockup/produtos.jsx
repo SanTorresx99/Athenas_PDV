@@ -1,31 +1,37 @@
-// produtos.jsx — Catálogo modular: revenda · fabricado · serviço · variável
-// Perfil do negócio: mercadinho · restaurante · vidraçaria · distribuidora
+// produtos.jsx — Catálogo modular: Comércio · Serviços · Fabricados
 
 const { useState: useProd, useMemo: useProdMemo, useEffect: useProdEffect } = React;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DATA MODEL
+// Módulos operacionais do negócio
+const MODULOS = [
+  {
+    k: 'comercio', l: 'Comércio', i: 'box',
+    sub: 'Produtos comprados e estocados para venda',
+    color: 'primary',
+    // Quais perfis de negócio têm este módulo ativo
+    ativos: ['mercadinho', 'distribuidora', 'restaurante', 'vidracaria'],
+  },
+  {
+    k: 'servicos', l: 'Serviços', i: 'clock',
+    sub: 'Mão de obra, tempo e prestação de serviço',
+    color: 'success',
+    ativos: ['restaurante', 'vidracaria'],
+  },
+  {
+    k: 'fabricados', l: 'Fabricados', i: 'sparkle',
+    sub: 'Produção própria com ficha técnica',
+    color: 'accent',
+    ativos: ['restaurante', 'vidracaria'],
+  },
+];
 
+// Sub-filtros dentro de Comércio
 const ITEM_TYPES = [
-  { k: 'todos',     l: 'Todos',     i: 'box',     c: 'muted' },
-  { k: 'revenda',   l: 'Revenda',   i: 'box',     c: 'primary',
-    desc: 'Comprado para revender' },
-  { k: 'fabricado', l: 'Fabricado', i: 'sparkle', c: 'accent',
-    desc: 'Produzido com ficha técnica' },
-  { k: 'servico',   l: 'Serviço',   i: 'clock',   c: 'success',
-    desc: 'Mão de obra ou tempo' },
-  { k: 'variavel',  l: 'Variável',  i: 'filter',  c: 'warning',
-    desc: 'Vendido por peso ou medida' },
+  { k: 'todos',   l: 'Todos',    i: 'box',    c: 'muted' },
+  { k: 'revenda', l: 'Revenda',  i: 'box',    c: 'primary', desc: 'Comprado para revender' },
+  { k: 'variavel',l: 'Variável', i: 'filter', c: 'warning', desc: 'Vendido por peso ou medida' },
 ];
-
-const PROFILES = [
-  { k: 'mercadinho',    l: 'Mercadinho',     icon: 'pdv',     sub: 'Revenda + variáveis' },
-  { k: 'restaurante',   l: 'Restaurante',    icon: 'sparkle', sub: 'Receitas + bebidas' },
-  { k: 'vidracaria',    l: 'Vidraçaria',     icon: 'box',     sub: 'Sob medida + serviços' },
-  { k: 'distribuidora', l: 'Distribuidora',  icon: 'stock',   sub: 'Atacado + logística' },
-];
-
-// Products loaded from API
 
 const TYPE_BADGE = (k) => {
   const map = {
@@ -34,14 +40,15 @@ const TYPE_BADGE = (k) => {
     servico:   { l: 'Serviço',   c: 'success' },
     variavel:  { l: 'Variável',  c: 'warning' },
   };
-  return map[k];
+  return map[k] || { l: 'Revenda', c: 'primary' };
 };
 
 const brl = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
 
 // ─────────────────────────────────────────────────────────────────────────────
 function Produtos({ tweaks, setTweak }) {
-  const profile = tweaks.profile || 'mercadinho';
+  const profile = tweaks.profile || 'distribuidora';
+  const [modulo, setModulo] = useProd('comercio');
   const [items, setItems] = useProd([]);
   const [pLoading, setPLoading] = useProd(true);
   const [type, setType] = useProd('todos');
@@ -89,8 +96,8 @@ function Produtos({ tweaks, setTweak }) {
   const selected = filtered.find(i => i.id === effectiveSelected);
 
   const counts = useProdMemo(() => {
-    const c = { todos: items.length, revenda: 0, fabricado: 0, servico: 0, variavel: 0 };
-    items.forEach(i => c[i.t]++);
+    const c = { todos: items.length, revenda: 0, variavel: 0 };
+    items.forEach(i => { if (c[i.t] !== undefined) c[i.t]++; });
     return c;
   }, [items]);
 
@@ -140,8 +147,8 @@ function Produtos({ tweaks, setTweak }) {
         </div>
       </div>
 
-      {/* Profile switcher */}
-      <ProfileSwitcher current={profile} onChange={(p) => { setTweak('profile', p); setSelectedId(null); }} />
+      {/* Módulos operacionais */}
+      <ModuleTabs profile={profile} current={modulo} onChange={(m) => { setModulo(m); setType('todos'); setSelectedId(null); }} />
 
       {/* KPI strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -152,8 +159,8 @@ function Produtos({ tweaks, setTweak }) {
         <SmallKPI eyebrow="Fabricados / ficha técnica" value={kpis.fabricados} foot="com receita cadastrada" icon="sparkle" tone="accent" />
       </div>
 
-      {/* Type tabs + search */}
-      <div style={{ marginTop: 18, display: 'flex', gap: 12, justifyContent: 'space-between',
+      {/* Sub-filtros + search */}
+      <div style={{ marginTop: 16, display: 'flex', gap: 12, justifyContent: 'space-between',
                      alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 4, background: 'var(--surface)',
                        border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
@@ -174,7 +181,7 @@ function Produtos({ tweaks, setTweak }) {
                 color: type === t.k ? 'inherit' : 'var(--muted)',
                 opacity: type === t.k ? .85 : 1,
                 fontFamily: 'var(--font-mono)',
-              }}>{counts[t.k]}</span>
+              }}>{counts[t.k] ?? 0}</span>
             </button>
           ))}
         </div>
@@ -255,44 +262,72 @@ function SmallKPI({ eyebrow, value, foot, icon, tone }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-function ProfileSwitcher({ current, onChange }) {
+function ModuleTabs({ profile, current, onChange }) {
   return (
-    <div className="a-card" style={{
-      padding: 6, marginTop: 8, display: 'grid',
-      gridTemplateColumns: 'repeat(4, 1fr)', gap: 6,
-      background: 'var(--surface)',
+    <div style={{
+      marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8,
     }}>
-      {PROFILES.map(p => {
-        const active = current === p.k;
+      {MODULOS.map(m => {
+        const ativo = m.ativos.includes(profile);
+        const sel = current === m.k && ativo;
         return (
-          <button key={p.k} onClick={() => onChange(p.k)}
+          <button
+            key={m.k}
+            onClick={() => ativo && onChange(m.k)}
+            disabled={!ativo}
             style={{
-              padding: '12px 14px', borderRadius: 9, cursor: 'default', fontFamily: 'inherit',
-              background: active ? 'linear-gradient(135deg, var(--primary-soft) 0%, var(--accent-soft) 200%)' : 'transparent',
-              border: '1px solid', borderColor: active ? 'var(--primary)' : 'transparent',
-              textAlign: 'left', display: 'flex', alignItems: 'center', gap: 12,
-              position: 'relative', minHeight: 56,
+              padding: '14px 16px', borderRadius: 12, fontFamily: 'inherit',
+              textAlign: 'left', display: 'flex', alignItems: 'center', gap: 14,
+              border: '1px solid',
+              borderColor: sel ? `var(--${m.color})` : 'var(--border)',
+              background: sel
+                ? `linear-gradient(135deg, var(--${m.color}-soft) 0%, transparent 120%)`
+                : 'var(--surface)',
+              cursor: ativo ? 'default' : 'not-allowed',
+              opacity: ativo ? 1 : 0.48,
+              position: 'relative',
+              transition: 'border-color .15s, background .15s',
             }}>
+            {/* Icon tile */}
             <div style={{
-              width: 36, height: 36, borderRadius: 8,
-              background: active ? 'var(--primary)' : 'var(--surface-2)',
-              color: active ? '#fff' : 'var(--muted)',
-              display: 'grid', placeItems: 'center', flexShrink: 0,
+              width: 42, height: 42, borderRadius: 10, flexShrink: 0,
+              background: sel ? `var(--${m.color})` : 'var(--surface-2)',
+              color: sel ? '#fff' : `var(--${m.color})`,
+              display: 'grid', placeItems: 'center',
+              transition: 'background .15s, color .15s',
             }}>
-              <Icon name={p.icon} size={16} stroke={1.8} />
+              <Icon name={m.i} size={18} stroke={1.8} />
             </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--text)' : 'var(--text-2)' }}>
-                {p.l}
+
+            {/* Text */}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{
+                fontSize: 13.5, fontWeight: 700, letterSpacing: '-.01em',
+                color: sel ? 'var(--text)' : ativo ? 'var(--text-2)' : 'var(--muted)',
+              }}>{m.l}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, lineHeight: 1.3 }}>
+                {m.sub}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{p.sub}</div>
             </div>
-            {active && (
+
+            {/* Estado */}
+            {sel && (
               <span style={{
-                position: 'absolute', top: 8, right: 10,
-                width: 6, height: 6, borderRadius: 999, background: 'var(--accent)',
-                boxShadow: '0 0 0 4px var(--accent-soft)',
+                position: 'absolute', top: 10, right: 12,
+                width: 7, height: 7, borderRadius: 999,
+                background: `var(--${m.color})`,
+                boxShadow: `0 0 0 3px var(--${m.color}-soft)`,
               }} />
+            )}
+            {!ativo && (
+              <span style={{
+                position: 'absolute', top: 10, right: 12,
+                fontSize: 10, fontWeight: 700, color: 'var(--muted-2)',
+                letterSpacing: '.06em', textTransform: 'uppercase',
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}>
+                <Icon name="close" size={10} stroke={2.2} /> não ativo
+              </span>
             )}
           </button>
         );
