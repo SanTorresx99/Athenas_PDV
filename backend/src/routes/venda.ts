@@ -17,7 +17,7 @@ interface PagamentoInput {
 // POST /api/venda — registrar e fechar venda
 vendaRoutes.post('/', async (c) => {
   const body = await c.req.json()
-  const { itens, forma_pagto, pagamentos, desconto = 0, troco = 0, observacao, operador_id } = body
+  const { itens, forma_pagto, pagamentos, desconto = 0, troco = 0, observacao, operador_id, dispositivo_id } = body
 
   if (!itens || !Array.isArray(itens) || itens.length === 0) {
     return c.json({ erro: 'itens é obrigatório e não pode estar vazio' }, 400)
@@ -73,9 +73,9 @@ vendaRoutes.post('/', async (c) => {
     }
 
     db.prepare(`
-      INSERT INTO venda (id, numero, status, forma_pagto, total, desconto, troco, observacao, operador_id, pagamentos, fechado_em)
-      VALUES (?, ?, 'fechada', ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(vendaId, numero, formaPagtoFinal, totalFinal, desconto, trocoFinal, observacao ?? null, operador_id ?? null, pagamentos ? JSON.stringify(pagamentos) : null)
+      INSERT INTO venda (id, numero, status, forma_pagto, total, desconto, troco, observacao, operador_id, dispositivo_id, pagamentos, fechado_em)
+      VALUES (?, ?, 'fechada', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(vendaId, numero, formaPagtoFinal, totalFinal, desconto, trocoFinal, observacao ?? null, operador_id ?? null, dispositivo_id ?? null, pagamentos ? JSON.stringify(pagamentos) : null)
 
     const insertItem = db.prepare(`
       INSERT INTO item_venda (id, venda_id, produto_id, quantidade, preco_unit, desconto, total)

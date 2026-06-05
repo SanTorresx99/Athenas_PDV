@@ -179,12 +179,13 @@ function PDV({ tweaks }) {
     setTimeout(() => inputRef.current?.focus(), 100);
   }
 
-  async function handleFecharCaixa(autorizador) {
+  async function handleFecharCaixa(autorizador, contagemFisica) {
     if (caixaInfo.sessaoId) {
       try {
         await window.api.post(`/api/caixa/${caixaInfo.sessaoId}/fechar`, {
           supervisor_nome: autorizador.nome,
           supervisor_codigo: autorizador.codigo || null,
+          contagem_fisica: contagemFisica ?? null,
         });
       } catch (_) {}
     }
@@ -1471,7 +1472,7 @@ function CaixaAberturaScreen({ onAbrir, caixaInfo, recentSales }) {
               autoFocus type="number" min="0" step="0.01"
               value={fundo}
               onChange={e => setFundo(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') onAbrir(parseFloat(fundo.replace(',','.')) || 0); }}
+              onKeyDown={e => { if (e.key === 'Enter' && canAbrir) onAbrir(parseFloat(fundo.replace(',','.')) || 0, { nome: opNome.trim(), codigo: opCodigo }); }}
               placeholder="0,00"
               className="a-input"
               style={{ height: 54, paddingLeft: 40, fontSize: 22, fontWeight: 700, letterSpacing: '-.01em' }}
@@ -1744,7 +1745,7 @@ function CaixaFechamentoModal({ caixaInfo, recentSales, onConfirmar, onCancelar 
         <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)',
                       display: 'flex', gap: 8, background: 'var(--surface-2)' }}>
           <button onClick={onCancelar} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>Cancelar</button>
-          <button onClick={() => canFechar && onConfirmar(auth)}
+          <button onClick={() => canFechar && onConfirmar(auth, contagemVal)}
                   disabled={!canFechar}
                   className="a-btn a-btn-primary"
                   style={{ flex: 2, justifyContent: 'center', opacity: canFechar ? 1 : .45 }}>

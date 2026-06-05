@@ -49,6 +49,11 @@
 - [x] PDV-05 — Recibo não-fiscal (tela)
 - [x] PDV-06 — Interface React do caixa — conectada ao backend
 - [x] PDV-07 — Histórico de vendas do dia (mini-lista no sidebar do PDV)
+- [x] PDV-12 — Abertura de caixa com fundo de troco
+- [x] PDV-13 — Fechamento de caixa com acerto (contagem física vs. esperado)
+- [x] PDV-14 — Sangria (retirada de numerário durante o turno)
+- [x] PDV-15 — Desconto por item no PDV (campo inline no carrinho)
+- [x] PDV-16 — Suporte a leitor de código de barras (Enter com código exato)
 
 ### Estoque
 - [x] EST-01 — GET /api/estoque
