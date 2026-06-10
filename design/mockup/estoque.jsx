@@ -53,7 +53,7 @@ function Estoque({ tweaks }) {
   const totais = useEstM(() => ({
     total:   produtos.length,
     critico: produtos.filter(p => p.critico).length,
-    valorEstoque: produtos.reduce((s, p) => s + (Number(p.saldo) * Number(p.preco_custo || p.preco_venda || 0)), 0),
+    valorEstoque: produtos.reduce((s, p) => s + (Number(p.saldo) * Number(p.custo_medio || p.preco_custo || 0)), 0),
   }), [produtos]);
 
   return (
@@ -232,7 +232,7 @@ function Estoque({ tweaks }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function EntradaModal({ produto, onClose, onSaved }) {
   const [qtdStr, setQtdStr]     = useEst('');
-  const [precoStr, setPrecoStr] = useEst(produto.preco_custo ? String(produto.preco_custo) : '');
+  const [precoStr, setPrecoStr] = useEst(produto.custo_medio > 0 ? String(produto.custo_medio) : (produto.preco_custo ? String(produto.preco_custo) : ''));
   const [obs, setObs]           = useEst('');
   const [saving, setSaving]     = useEst(false);
   const [erro, setErro]         = useEst('');
@@ -245,7 +245,7 @@ function EntradaModal({ produto, onClose, onSaved }) {
       await window.api.post('/api/estoque/entrada', {
         produto_id: produto.id,
         quantidade: qtd,
-        preco_custo: parseFloat(precoStr) || null,
+        custo_unitario: parseFloat(precoStr) || null,
         observacao: obs || null,
       });
       onSaved();

@@ -52,7 +52,7 @@ function KDS({ tweaks }) {
       <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Icon name="sparkle" size={18} stroke={1.6} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontWeight: 700, fontSize: 16 }}>Cozinha / Produção</span>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>Fabricação & Produção</span>
           {totalAtivos > 0 && (
             <span style={{ padding: '2px 10px', borderRadius: 999, background: 'var(--warning-soft)', color: 'var(--warning)', fontWeight: 700, fontSize: 12 }}>
               {totalAtivos} na fila

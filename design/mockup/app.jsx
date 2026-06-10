@@ -107,7 +107,7 @@ const NAV = [
   { k: 'stock',     l: 'Estoque',       i: 'stock',     group: 'GESTÃO' },
   { k: 'compras',   l: 'Compras',       i: 'finance',   group: 'GESTÃO' },
   { k: 'clients',   l: 'Clientes',      i: 'clients',   group: 'GESTÃO' },
-  { k: 'kds',       l: 'Cozinha / KDS', i: 'sparkle',   group: 'GESTÃO' },
+  { k: 'kds',       l: 'Fabricação',    i: 'sparkle',   group: 'GESTÃO' },
   { k: 'reports',   l: 'Relatórios',    i: 'reports',   group: 'GESTÃO', disabled: true },
   { k: 'settings',  l: 'Configurações', i: 'settings',  group: '',       disabled: true },
 ];
@@ -192,7 +192,7 @@ function App() {
 function routeLabel(r) {
   const m = { brand:'Marca', dashboard:'Dashboard', pdv:'PDV',
                produtos:'Produtos', stock:'Estoque', compras:'Compras',
-               clients:'Clientes', kds:'Cozinha / KDS' };
+               clients:'Clientes', kds:'Fabricação' };
   return m[r] || r;
 }
 
@@ -342,7 +342,7 @@ function TopBar({ route, tweaks, setTweak, subtheme }) {
     stock:     { c: 'Gestão',     t: 'Estoque' },
     compras:   { c: 'Gestão',     t: 'Compras & Fornecedores' },
     clients:   { c: 'Gestão',     t: 'Clientes & Fiado' },
-    kds:       { c: 'Produção',   t: 'Cozinha / Kitchen Display System' },
+    kds:       { c: 'Fabricação',  t: 'Fabricação & Fila de Produção' },
   };
   const m = map[route] || map.brand;
   return (
