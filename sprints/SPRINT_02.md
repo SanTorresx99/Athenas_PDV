@@ -54,6 +54,19 @@
 - [ ] DSH-05 — Top produtos: tabela com os 10 mais vendidos no período selecionado (hoje / 7d / 30d); colunas: produto, qtd vendida, faturamento, % do total
 - [ ] DSH-06 — Export CSV: botão em cada relatório (top produtos, gastos fornecedor); gera CSV com cabeçalho em PT-BR via `Blob`
 
+### Módulo Produto — CME, Ficha Técnica e Tipos (novo)
+
+- [ ] PRD-04 — Migration: adicionar `tipo`, `custo_medio`, `tempo_preparo_min`, `rendimento_qtd`, `rendimento_un`, `qtd_embalagem` à tabela `produto`
+- [ ] PRD-05 — Migration: adicionar `custo_unitario` a `movimento_estoque` e `item_venda`
+- [ ] PRD-06 — Migration: criar tabelas `ficha_tecnica` e `recurso_servico`
+- [ ] PRD-07 — CME automático: atualizar `POST /api/estoque/entrada` e `POST /api/compras/ordem/:id/receber` para recalcular `produto.custo_medio` pelo PMP a cada entrada; gravar `custo_unitario` no movimento
+- [ ] PRD-08 — CMV na venda: atualizar `POST /api/venda` para gravar `item_venda.custo_unitario = produto.custo_medio` no momento do fechamento
+- [ ] PRD-09 — Endpoint `GET /api/produto/:id/custo`: retorna CME atual, CMV estimado, margem bruta, markup, histórico de custo (últimas entradas com custo)
+- [ ] PRD-10 — CRUD ficha técnica: `POST/PUT/DELETE /api/produto/:id/ficha` — gerenciar insumos do produto fabricado; retornar custo total calculado
+- [ ] PRD-11 — CRUD recursos de serviço: `POST/DELETE /api/produto/:id/recurso` — ferramentas, equipamentos, consumíveis
+- [ ] PRD-12 — UI: painel de detalhe do produto com dados específicos por tipo (BodyRevenda com CME/margem/markup, BodyFabricado com ficha técnica editável, BodyServico com lista de recursos)
+- [ ] PRD-13 — UI: formulário de cadastro/edição de produto com campo `tipo` e seções condicionais por tipo
+
 ### Módulo Clientes (novo)
 
 - [ ] CLI-01 — Cadastro de clientes: tabela `cliente` (id, nome, cpf_cnpj, telefone, endereco, limite_fiado, ativo); CRUD completo com validação de CPF/CNPJ

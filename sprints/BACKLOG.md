@@ -162,11 +162,21 @@ Prioridade: P1 (crítico MVP) → P2 (importante) → P3 (desejável) → P4 (fu
 
 ---
 
-## Produto / Catálogo (melhorias)
+## Produto / Catálogo
 
 | ID | Tarefa | Prioridade | Sprint |
 |----|--------|------------|--------|
-| PRD-01 | Edição de custo e preço em lote (CSV import/export) | P2 | 02 |
+| PRD-04 | Migration: tipo, custo_medio, tempo_preparo, rendimento, qtd_embalagem no produto | P1 | 02 |
+| PRD-05 | Migration: custo_unitario em movimento_estoque e item_venda | P1 | 02 |
+| PRD-06 | Migration: tabelas ficha_tecnica e recurso_servico | P1 | 02 |
+| PRD-07 | CME automático pelo PMP a cada entrada de estoque e recebimento de OC | P1 | 02 |
+| PRD-08 | CMV na venda: gravar custo_unitario = CME no item_venda ao fechar venda | P1 | 02 |
+| PRD-09 | Endpoint GET /api/produto/:id/custo (CME, CMV, margem, markup, histórico) | P2 | 02 |
+| PRD-10 | CRUD ficha técnica (BOM) para produtos fabricados | P2 | 02 |
+| PRD-11 | CRUD recursos de serviço (ferramentas, equipamentos, consumíveis) | P2 | 02 |
+| PRD-12 | UI: painel de detalhe com dados específicos por tipo (revenda/fabricado/serviço) | P2 | 02 |
+| PRD-13 | UI: formulário de cadastro com campo tipo e seções condicionais | P2 | 02 |
+| PRD-01 | Edição de custo e preço em lote (CSV import/export) | P3 | 02 |
 | PRD-02 | Histórico de alterações de preço (auditoria via audit_log) | P3 | 03 |
 | PRD-03 | Variações de produto (sabor, tamanho, cor — grade) | P3 | 04 |
 
