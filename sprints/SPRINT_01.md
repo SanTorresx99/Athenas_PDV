@@ -30,9 +30,9 @@
 - [x] INF-04 — Seed de dados para dev
 - [x] INF-05 — Middleware de autenticação
 - [x] INF-06 — Logger de requisições
-- [ ] LAN-01 — Configuração Hub / secundário *(Sprint 02)*
-- [ ] LAN-02 — Autenticação de módulo secundário *(Sprint 02)*
-- [ ] LAN-04 — Config manual de IP do Hub *(Sprint 02)*
+- [ ] LAN-01 — Configuração Hub / secundário → **adiado Sprint 02**
+- [ ] LAN-02 — Autenticação de módulo secundário → **adiado Sprint 02**
+- [ ] LAN-04 — Config manual de IP do Hub → **adiado Sprint 02**
 
 ### Licença
 - [x] LIC-01 — Tabela licenca + decremento diário
