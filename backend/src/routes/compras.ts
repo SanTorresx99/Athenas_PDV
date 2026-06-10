@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { db, getSaldoProduto } from '../db/index'
+import { db, getSaldoProduto, recalcularCME } from '../db/index'
 
 export const comprasRoutes = new Hono()
 
@@ -138,29 +138,31 @@ comprasRoutes.post('/ordem/:id/receber', async (c) => {
 
   db.transaction(() => {
     const insertMov = db.prepare(`
-      INSERT INTO movimento_estoque (id, produto_id, tipo, quantidade, saldo_apos, origem, origem_id, operador_id)
-      VALUES (?, ?, 'entrada', ?, ?, 'compra', ?, ?)
+      INSERT INTO movimento_estoque (id, produto_id, tipo, quantidade, saldo_apos, custo_unitario, origem, origem_id, operador_id)
+      VALUES (?, ?, 'entrada', ?, ?, ?, 'compra', ?, ?)
     `)
 
     for (const item of itens) {
-      const itemOrdem = db.query<{ produto_id: string; quantidade: number }, [string]>(
-        'SELECT produto_id, quantidade FROM item_ordem_compra WHERE id = ?'
+      const itemOrdem = db.query<{ produto_id: string; quantidade: number; preco_unit: number | null }, [string]>(
+        'SELECT produto_id, quantidade, preco_unit FROM item_ordem_compra WHERE id = ?'
       ).get(item.item_ordem_compra_id)
       if (!itemOrdem) continue
 
       const qtdRecebida = item.quantidade_recebida ?? itemOrdem.quantidade
+      const custoUnit = item.preco_unit ?? itemOrdem.preco_unit ?? 0
+
+      // Recalcula CME pelo PMP antes de registrar a entrada
+      const novoCME = recalcularCME(itemOrdem.produto_id, qtdRecebida, custoUnit)
       const saldoApos = getSaldoProduto(itemOrdem.produto_id) + qtdRecebida
 
-      insertMov.run(crypto.randomUUID(), itemOrdem.produto_id, qtdRecebida, saldoApos, ordemId, operador_id ?? null)
+      insertMov.run(crypto.randomUUID(), itemOrdem.produto_id, qtdRecebida, saldoApos, custoUnit, ordemId, operador_id ?? null)
 
-      db.prepare(`
-        UPDATE item_ordem_compra SET quantidade_recebida = ? WHERE id = ?
-      `).run(qtdRecebida, item.item_ordem_compra_id)
+      db.prepare('UPDATE item_ordem_compra SET quantidade_recebida = ?, preco_unit = COALESCE(?, preco_unit) WHERE id = ?')
+        .run(qtdRecebida, item.preco_unit ?? null, item.item_ordem_compra_id)
 
-      if (item.preco_unit) {
-        db.prepare('UPDATE produto SET preco_custo = ?, atualizado_em = datetime(\'now\') WHERE id = ?')
-          .run(item.preco_unit, itemOrdem.produto_id)
-      }
+      // Atualiza preco_custo com o custo da entrada mais recente
+      db.prepare('UPDATE produto SET preco_custo = ?, custo_medio = ?, atualizado_em = datetime(\'now\') WHERE id = ?')
+        .run(custoUnit, novoCME, itemOrdem.produto_id)
     }
 
     db.prepare(`UPDATE ordem_compra SET status = 'recebida', recebido_em = datetime('now') WHERE id = ?`).run(ordemId)
@@ -178,4 +180,55 @@ comprasRoutes.post('/ordem/:id/cancelar', (c) => {
 
   db.prepare(`UPDATE ordem_compra SET status = 'cancelada' WHERE id = ?`).run(id)
   return c.json({ mensagem: 'Ordem cancelada' })
+})
+
+// GET /api/compras/relatorio — gastos por fornecedor e período (CMP-06)
+// Query params: de (YYYY-MM-DD), ate (YYYY-MM-DD), fornecedor_id
+comprasRoutes.get('/relatorio', (c) => {
+  const de = c.req.query('de') ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  const ate = c.req.query('ate') ?? new Date().toISOString().slice(0, 10)
+  const fornecedor_id = c.req.query('fornecedor_id')
+
+  const filtroFornecedor = fornecedor_id ? 'AND o.fornecedor_id = ?' : ''
+  const params: string[] = fornecedor_id
+    ? [`${de} 00:00:00`, `${ate} 23:59:59`, fornecedor_id]
+    : [`${de} 00:00:00`, `${ate} 23:59:59`]
+
+  const resumo = db.query<Record<string, unknown>, string[]>(`
+    SELECT
+      f.id as fornecedor_id, f.nome as fornecedor,
+      COUNT(o.id) as qtd_ordens,
+      COALESCE(SUM(o.total), 0) as total_gasto,
+      MIN(o.criado_em) as primeira_compra,
+      MAX(o.criado_em) as ultima_compra
+    FROM ordem_compra o
+    JOIN fornecedor f ON f.id = o.fornecedor_id
+    WHERE o.status = 'recebida'
+      AND o.recebido_em BETWEEN ? AND ?
+      ${filtroFornecedor}
+    GROUP BY f.id
+    ORDER BY total_gasto DESC
+  `).all(...params)
+
+  const totalGeral = (resumo as any[]).reduce((s: number, r: any) => s + Number(r.total_gasto), 0)
+
+  return c.json({ de, ate, total_geral: totalGeral, fornecedores: resumo })
+})
+
+// GET /api/compras/sugestoes — pré-ordens sugeridas para produtos críticos (CMP-07)
+comprasRoutes.get('/sugestoes', (c) => {
+  const sugestoes = db.query<Record<string, unknown>, []>(`
+    SELECT
+      p.id, p.codigo, p.nome, p.unidade, p.estoque_min, p.custo_medio,
+      COALESCE(SUM(CASE WHEN m.tipo = 'entrada' THEN m.quantidade ELSE -m.quantidade END), 0) AS saldo,
+      (p.estoque_min * 3) AS qtd_sugerida
+    FROM produto p
+    LEFT JOIN movimento_estoque m ON m.produto_id = p.id
+    WHERE p.ativo = 1 AND p.tipo IN ('revenda','variavel')
+    GROUP BY p.id
+    HAVING saldo <= p.estoque_min AND p.estoque_min > 0
+    ORDER BY saldo ASC
+  `).all()
+
+  return c.json(sugestoes)
 })

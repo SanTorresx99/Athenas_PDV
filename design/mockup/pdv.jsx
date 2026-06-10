@@ -25,7 +25,8 @@ function PDV({ tweaks }) {
   });
   const [showFechamento, setShowFechamento] = useP(false);
   const [showSangria, setShowSangria] = useP(false);
-  const [cancelandoId, setCancelandoId] = useP(null); // vendaId sendo cancelada
+  const [cancelandoId, setCancelandoId] = useP(null);
+  const [clienteSelecionado, setClienteSelecionado] = useP(null); // { id, nome } para fiado
   const inputRef = useR(null);
 
   const CAIXA_KEY = 'athenas_caixa_sessao';
@@ -140,6 +141,7 @@ function PDV({ tweaks }) {
         troco,
         operador_id: caixaInfo.operador?.nome || null,
         dispositivo_id: caixaInfo.sessaoId || null,
+        cliente_id: clienteSelecionado?.id || null,
       });
       const saleData = {
         id: `V-${String(result.numero).padStart(4, '0')}`,
@@ -160,7 +162,7 @@ function PDV({ tweaks }) {
 
   function newSale() {
     setCart([]); setDiscount(0); setStage('shop');
-    setQuery(''); inputRef.current?.focus();
+    setClienteSelecionado(null); setQuery(''); inputRef.current?.focus();
   }
 
   async function handleAbrirCaixa(fundo, operador) {
@@ -397,6 +399,8 @@ function PDV({ tweaks }) {
           onCancel={() => setStage('shop')}
           onConfirm={finalizeSale}
           saving={saving}
+          clienteSelecionado={clienteSelecionado}
+          onClienteChange={setClienteSelecionado}
         />
       )}
 
@@ -813,23 +817,35 @@ const pagBtn = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 const PAYMENT_METHODS = [
-  { k: 'pix',    l: 'Pix',      i: 'pix'  },
-  { k: 'credit', l: 'Crédito',  i: 'card' },
-  { k: 'debit',  l: 'Débito',   i: 'card' },
-  { k: 'cash',   l: 'Dinheiro', i: 'cash' },
+  { k: 'pix',    l: 'Pix',      i: 'pix'     },
+  { k: 'credit', l: 'Crédito',  i: 'card'    },
+  { k: 'debit',  l: 'Débito',   i: 'card'    },
+  { k: 'cash',   l: 'Dinheiro', i: 'cash'    },
+  { k: 'fiado',  l: 'Fiado',    i: 'clients' },
 ];
 const formaLabel = k => PAYMENT_METHODS.find(m => m.k === k)?.l ?? k;
 
-function PaymentModal({ total, onCancel, onConfirm, saving }) {
+function PaymentModal({ total, onCancel, onConfirm, saving, clienteSelecionado, onClienteChange }) {
   const [entries, setEntries] = useP([]);   // [{forma, valor}]
   const [forma, setForma] = useP('pix');
   const [valorStr, setValorStr] = useP('');
+  const [buscaCliente, setBuscaCliente] = useP('');
+  const [clientes, setClientes] = useP([]);
   const valorRef = useR(null);
 
   const totalPago = entries.reduce((s, e) => s + e.valor, 0);
   const faltando = Math.max(0, total - totalPago);
   const troco = Math.max(0, totalPago - total);
-  const canConfirm = totalPago >= total && entries.length > 0 && !saving;
+  const temFiado = entries.some(e => e.forma === 'fiado') || forma === 'fiado';
+  const fiadoOk = !temFiado || clienteSelecionado;
+  const canConfirm = totalPago >= total && entries.length > 0 && !saving && fiadoOk;
+
+  useE(() => {
+    if (forma !== 'fiado') return;
+    const q = buscaCliente.trim();
+    if (q.length < 2) { setClientes([]); return; }
+    window.api.get(`/api/cliente?q=${encodeURIComponent(q)}`).then(setClientes).catch(() => {});
+  }, [buscaCliente, forma]);
 
   useE(() => {
     function onKey(e) {
@@ -924,12 +940,51 @@ function PaymentModal({ total, onCancel, onConfirm, saving }) {
             </div>
           )}
 
+          {/* Seletor de cliente para fiado */}
+          {(temFiado) && (
+            <div style={{ padding: 12, borderRadius: 10, background: 'var(--warning-soft)', border: '1px solid var(--warning)', marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 8 }}>
+                Cliente para fiado {!clienteSelecionado && '— obrigatório'}
+              </div>
+              {clienteSelecionado
+                ? (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>
+                      <Icon name="user" size={13} /> {clienteSelecionado.nome}
+                    </div>
+                    <button onClick={() => { onClienteChange(null); setBuscaCliente(''); }} className="a-btn a-btn-ghost" style={{ height: 26, padding: '0 8px', fontSize: 11 }}>
+                      <Icon name="close" size={11} /> Trocar
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position: 'relative' }}>
+                    <input className="a-input" value={buscaCliente} onChange={e => setBuscaCliente(e.target.value)}
+                      placeholder="Digite o nome ou CPF do cliente…" autoFocus style={{ height: 36 }} />
+                    {clientes.length > 0 && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginTop: 4, boxShadow: 'var(--shadow-pop)' }}>
+                        {clientes.slice(0, 5).map(c => (
+                          <button key={c.id} onClick={() => { onClienteChange(c); setBuscaCliente(''); setClientes([]); }}
+                            style={{ width: '100%', padding: '10px 14px', border: 'none', background: 'transparent', textAlign: 'left',
+                                     cursor: 'default', fontFamily: 'inherit', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ fontWeight: 600 }}>{c.nome}</div>
+                            {c.cpf_cnpj && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{c.cpf_cnpj}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              }
+            </div>
+          )}
+
           {/* Add entry panel */}
           {faltando > 0 && (
             <div style={{ padding: 16, borderRadius: 12, background: 'var(--surface-2)',
                           border: '1px solid var(--border)' }}>
               {/* Method selector */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginBottom: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 12 }}>
                 {PAYMENT_METHODS.map(m => (
                   <button key={m.k} onClick={() => setForma(m.k)} style={{
                     padding: '10px 6px', borderRadius: 8, cursor: 'default', fontFamily: 'inherit',
@@ -1175,7 +1230,12 @@ function ReceiptModal({ sale, onClose, reprint = false }) {
   .row.grand{font-size:15px;font-weight:700;color:#111;padding-top:5px}
   .footer{text-align:center;margin-top:12px;font-size:9px;color:#999;line-height:1.7}
   .powered{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.05em}
-  @media print{body{padding:6px 4px;width:auto}}
+  @media print{
+    @page{size:80mm auto;margin:4mm 3mm}
+    body{width:80mm;margin:0;padding:4px 2px;font-size:10px}
+    .wordmark{font-size:15px}
+    .row.grand{font-size:13px}
+  }
 </style>
 </head>
 <body>
@@ -1275,16 +1335,28 @@ ${sale.troco > 0 ? `<div class="row sm"><span>Troco</span><span>R$&nbsp;${sale.t
         </div>
 
         <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)',
-                      display: 'flex', gap: 8, background: 'var(--surface-2)' }}>
-          <button onClick={printReceipt} className="a-btn" style={{ flex: 1, justifyContent: 'center' }}>
+                      display: 'flex', gap: 8, background: 'var(--surface-2)', flexWrap: 'wrap' }}>
+          <button onClick={printReceipt} className="a-btn" style={{ flex: 1, justifyContent: 'center', minWidth: 90 }}>
             <Icon name="arrow-down" size={14} /> Imprimir
           </button>
+          <button onClick={() => {
+            // Abre a mesma janela de recibo mas com title PDF para o navegador salvar como PDF
+            const w = window.open('', '_blank', 'width=420,height=700,toolbar=0,menubar=0,location=0');
+            if (!w) return;
+            // Inject receipt — usa a mesma função printReceipt mas muda o título
+            printReceipt();
+            setTimeout(() => {
+              try { w.document.title = `Recibo-${sale.id}.pdf`; } catch(_) {}
+            }, 200);
+          }} className="a-btn" style={{ flex: 1, justifyContent: 'center', minWidth: 90 }}>
+            <Icon name="reports" size={14} /> PDF
+          </button>
           <button onClick={sendWhatsApp} className="a-btn"
-                  style={{ flex: 1, justifyContent: 'center', color: '#25D366',
+                  style={{ flex: 1, justifyContent: 'center', minWidth: 90, color: '#25D366',
                            borderColor: 'rgba(37,211,102,.35)', background: 'rgba(37,211,102,.08)' }}>
             <Icon name="whatsapp" size={14} /> WhatsApp
           </button>
-          <button onClick={onClose} className="a-btn a-btn-primary" style={{ flex: 1.4, justifyContent: 'center' }}>
+          <button onClick={onClose} className="a-btn a-btn-primary" style={{ flex: 1.4, justifyContent: 'center', minWidth: 100 }}>
             Nova venda
             <span className="a-mono" style={{ fontSize: 10, opacity: .8, marginLeft: 4,
                                                border: '1px solid rgba(255,255,255,.3)',

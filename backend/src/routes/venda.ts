@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { db, getSaldoProduto } from '../db/index'
+import { db, getSaldoProduto, getCMEProduto } from '../db/index'
 
 export const vendaRoutes = new Hono()
 
@@ -7,6 +7,16 @@ interface ItemInput {
   produto_id: string
   quantidade: number
   desconto?: number
+}
+
+type ItemResolvido = {
+  produto_id: string
+  quantidade: number
+  preco_unit: number
+  custo_unitario: number
+  desconto: number
+  total: number
+  requer_producao: number
 }
 
 interface PagamentoInput {
@@ -17,7 +27,7 @@ interface PagamentoInput {
 // POST /api/venda — registrar e fechar venda
 vendaRoutes.post('/', async (c) => {
   const body = await c.req.json()
-  const { itens, forma_pagto, pagamentos, desconto = 0, troco = 0, observacao, operador_id, dispositivo_id } = body
+  const { itens, forma_pagto, pagamentos, desconto = 0, troco = 0, observacao, operador_id, dispositivo_id, cliente_id } = body
 
   if (!itens || !Array.isArray(itens) || itens.length === 0) {
     return c.json({ erro: 'itens é obrigatório e não pode estar vazio' }, 400)
@@ -38,13 +48,12 @@ vendaRoutes.post('/', async (c) => {
     const vendaId = crypto.randomUUID()
 
     // Resolve produtos e calcula total antes de qualquer INSERT
-    type ItemResolvido = { produto_id: string; quantidade: number; preco_unit: number; desconto: number; total: number }
     const itensResolvidos: ItemResolvido[] = []
     let totalVenda = 0
 
     for (const item of itens as ItemInput[]) {
-      const produto = db.query<{ preco_venda: number; nome: string }, [string]>(
-        'SELECT preco_venda, nome FROM produto WHERE id = ? AND ativo = 1'
+      const produto = db.query<{ preco_venda: number; nome: string; custo_medio: number; requer_producao: number }, [string]>(
+        'SELECT preco_venda, nome, custo_medio, requer_producao FROM produto WHERE id = ? AND ativo = 1'
       ).get(item.produto_id)
 
       if (!produto) throw new Error(`Produto ${item.produto_id} não encontrado`)
@@ -52,7 +61,15 @@ vendaRoutes.post('/', async (c) => {
       const itemDesconto = item.desconto ?? 0
       const total = (produto.preco_venda * item.quantidade) - itemDesconto
       totalVenda += total
-      itensResolvidos.push({ produto_id: item.produto_id, quantidade: item.quantidade, preco_unit: produto.preco_venda, desconto: itemDesconto, total })
+      itensResolvidos.push({
+        produto_id: item.produto_id,
+        quantidade: item.quantidade,
+        preco_unit: produto.preco_venda,
+        custo_unitario: produto.custo_medio ?? 0,
+        desconto: itemDesconto,
+        total,
+        requer_producao: produto.requer_producao ?? 0,
+      })
     }
 
     // INSERT venda primeiro (FK referenciada pelos itens)
@@ -73,27 +90,51 @@ vendaRoutes.post('/', async (c) => {
     }
 
     db.prepare(`
-      INSERT INTO venda (id, numero, status, forma_pagto, total, desconto, troco, observacao, operador_id, dispositivo_id, pagamentos, fechado_em)
-      VALUES (?, ?, 'fechada', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(vendaId, numero, formaPagtoFinal, totalFinal, desconto, trocoFinal, observacao ?? null, operador_id ?? null, dispositivo_id ?? null, pagamentos ? JSON.stringify(pagamentos) : null)
+      INSERT INTO venda (id, numero, status, forma_pagto, total, desconto, troco, observacao, operador_id, dispositivo_id, cliente_id, pagamentos, fechado_em)
+      VALUES (?, ?, 'fechada', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(vendaId, numero, formaPagtoFinal, totalFinal, desconto, trocoFinal, observacao ?? null, operador_id ?? null, dispositivo_id ?? null, cliente_id ?? null, pagamentos ? JSON.stringify(pagamentos) : null)
 
     const insertItem = db.prepare(`
-      INSERT INTO item_venda (id, venda_id, produto_id, quantidade, preco_unit, desconto, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO item_venda (id, venda_id, produto_id, quantidade, preco_unit, custo_unitario, desconto, total)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const insertMov = db.prepare(`
-      INSERT INTO movimento_estoque (id, produto_id, tipo, quantidade, saldo_apos, origem, origem_id)
-      VALUES (?, ?, 'saida', ?, ?, 'venda', ?)
+      INSERT INTO movimento_estoque (id, produto_id, tipo, quantidade, saldo_apos, custo_unitario, origem, origem_id)
+      VALUES (?, ?, 'saida', ?, ?, ?, 'venda', ?)
     `)
+
+    const itensKDS: typeof itensResolvidos = []
 
     // INSERT itens e movimentos de estoque
     for (const it of itensResolvidos) {
-      insertItem.run(crypto.randomUUID(), vendaId, it.produto_id, it.quantidade, it.preco_unit, it.desconto, it.total)
+      insertItem.run(crypto.randomUUID(), vendaId, it.produto_id, it.quantidade, it.preco_unit, it.custo_unitario, it.desconto, it.total)
       const saldoApos = getSaldoProduto(it.produto_id) - it.quantidade
-      insertMov.run(crypto.randomUUID(), it.produto_id, it.quantidade, saldoApos, vendaId)
+      insertMov.run(crypto.randomUUID(), it.produto_id, it.quantidade, saldoApos, it.custo_unitario, vendaId)
+      if (it.requer_producao) itensKDS.push(it)
     }
 
-    return { id: vendaId, numero, total: totalFinal, troco: trocoFinal }
+    // Registrar fiado se forma de pagamento incluir 'fiado' e tiver cliente
+    if (cliente_id && pagamentos && Array.isArray(pagamentos)) {
+      const temFiado = (pagamentos as PagamentoInput[]).some(p => p.forma === 'fiado')
+      if (temFiado) {
+        const valorFiado = (pagamentos as PagamentoInput[]).filter(p => p.forma === 'fiado').reduce((s, p) => s + p.valor, 0)
+        db.prepare(`INSERT INTO conta_corrente (id, cliente_id, tipo, valor, venda_id) VALUES (?, ?, 'compra', ?, ?)`)
+          .run(crypto.randomUUID(), cliente_id, valorFiado, vendaId)
+      }
+    }
+
+    // Criar pedido de produção para itens com requer_producao
+    if (itensKDS.length > 0) {
+      const pedidoId = crypto.randomUUID()
+      db.prepare(`INSERT INTO pedido_producao (id, venda_id, status) VALUES (?, ?, 'pendente')`)
+        .run(pedidoId, vendaId)
+      for (const it of itensKDS) {
+        db.prepare(`INSERT INTO item_pedido_producao (id, pedido_producao_id, produto_id, quantidade) VALUES (?, ?, ?, ?)`)
+          .run(crypto.randomUUID(), pedidoId, it.produto_id, it.quantidade)
+      }
+    }
+
+    return { id: vendaId, numero, total: totalFinal, troco: trocoFinal, pedido_producao: itensKDS.length > 0 }
   })()
 
   return c.json({ ...resultado, mensagem: 'Venda registrada' }, 201)

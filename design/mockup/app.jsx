@@ -106,8 +106,9 @@ const NAV = [
   { k: 'produtos',  l: 'Produtos',      i: 'products',  group: 'GESTÃO' },
   { k: 'stock',     l: 'Estoque',       i: 'stock',     group: 'GESTÃO' },
   { k: 'compras',   l: 'Compras',       i: 'finance',   group: 'GESTÃO' },
+  { k: 'clients',   l: 'Clientes',      i: 'clients',   group: 'GESTÃO' },
+  { k: 'kds',       l: 'Cozinha / KDS', i: 'sparkle',   group: 'GESTÃO' },
   { k: 'reports',   l: 'Relatórios',    i: 'reports',   group: 'GESTÃO', disabled: true },
-  { k: 'clients',   l: 'Clientes',      i: 'clients',   group: 'GESTÃO', disabled: true, count: '348' },
   { k: 'settings',  l: 'Configurações', i: 'settings',  group: '',       disabled: true },
 ];
 
@@ -139,6 +140,8 @@ function App() {
           {route === 'produtos'  && <Produtos tweaks={t} setTweak={setTweak} />}
           {route === 'stock'     && <Estoque tweaks={t} />}
           {route === 'compras'   && <Compras tweaks={t} />}
+          {route === 'clients'   && <Clientes tweaks={t} />}
+          {route === 'kds'       && <KDS tweaks={t} />}
         </div>
       </div>
 
@@ -188,7 +191,8 @@ function App() {
 
 function routeLabel(r) {
   const m = { brand:'Marca', dashboard:'Dashboard', pdv:'PDV',
-               produtos:'Produtos', stock:'Estoque', compras:'Compras' };
+               produtos:'Produtos', stock:'Estoque', compras:'Compras',
+               clients:'Clientes', kds:'Cozinha / KDS' };
   return m[r] || r;
 }
 
@@ -337,6 +341,8 @@ function TopBar({ route, tweaks, setTweak, subtheme }) {
     produtos:  { c: 'Catálogo',   t: 'Produtos, serviços e fabricados' },
     stock:     { c: 'Gestão',     t: 'Estoque' },
     compras:   { c: 'Gestão',     t: 'Compras & Fornecedores' },
+    clients:   { c: 'Gestão',     t: 'Clientes & Fiado' },
+    kds:       { c: 'Produção',   t: 'Cozinha / Kitchen Display System' },
   };
   const m = map[route] || map.brand;
   return (

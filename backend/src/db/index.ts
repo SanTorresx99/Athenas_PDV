@@ -19,3 +19,23 @@ export function getSaldoProduto(produto_id: string): number {
   ).get(produto_id)
   return row?.saldo ?? 0
 }
+
+export function getCMEProduto(produto_id: string): number {
+  const row = db.query<{ custo_medio: number }, string>(
+    'SELECT COALESCE(custo_medio, 0) AS custo_medio FROM produto WHERE id = ?'
+  ).get(produto_id)
+  return row?.custo_medio ?? 0
+}
+
+// Recalcula o CME pelo método PMP e persiste em produto.custo_medio
+// Deve ser chamado DENTRO de uma transação, após confirmar o saldo atual
+export function recalcularCME(produto_id: string, qtdEntrada: number, custoEntrada: number): number {
+  const saldoAtual = getSaldoProduto(produto_id)
+  const cmeAtual = getCMEProduto(produto_id)
+  const cmeNovo = saldoAtual <= 0
+    ? custoEntrada
+    : (saldoAtual * cmeAtual + qtdEntrada * custoEntrada) / (saldoAtual + qtdEntrada)
+  db.prepare('UPDATE produto SET custo_medio = ?, atualizado_em = datetime(\'now\') WHERE id = ?')
+    .run(cmeNovo, produto_id)
+  return cmeNovo
+}

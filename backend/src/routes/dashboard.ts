@@ -77,3 +77,96 @@ dashboardRoutes.get('/', (c) => {
     mais_vendidos,
   })
 })
+
+// GET /api/dashboard/relatorio — top produtos por período (DSH-05)
+// Query: de (YYYY-MM-DD), ate (YYYY-MM-DD), limite
+dashboardRoutes.get('/relatorio', (c) => {
+  const de  = c.req.query('de')  ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  const ate = c.req.query('ate') ?? new Date().toISOString().slice(0, 10)
+  const limite = Math.min(Number(c.req.query('limite') ?? 20), 100)
+
+  const topProdutos = db.query<Record<string, unknown>, [string, string]>(`
+    SELECT
+      p.id, p.codigo, p.nome, p.unidade, p.categoria, p.custo_medio,
+      SUM(i.quantidade)                                                   AS qtd_vendida,
+      SUM(i.total)                                                        AS receita,
+      SUM(i.total) - SUM(i.quantidade * COALESCE(i.custo_unitario, 0))   AS lucro_bruto,
+      CASE WHEN SUM(i.total) > 0
+        THEN ((SUM(i.total) - SUM(i.quantidade * COALESCE(i.custo_unitario, 0))) / SUM(i.total)) * 100
+        ELSE 0
+      END AS margem_media
+    FROM item_venda i
+    JOIN produto p ON p.id = i.produto_id
+    JOIN venda v   ON v.id = i.venda_id
+    WHERE v.criado_em BETWEEN ? AND ?
+      AND v.status = 'fechada'
+    GROUP BY p.id
+    ORDER BY receita DESC
+    LIMIT ${limite}
+  `).all(`${de} 00:00:00`, `${ate} 23:59:59`)
+
+  const porHora = db.query<Record<string, unknown>, [string, string]>(`
+    SELECT
+      strftime('%H', v.criado_em) AS hora,
+      COUNT(*) AS qtd_vendas,
+      SUM(v.total) AS faturamento
+    FROM venda v
+    WHERE v.criado_em BETWEEN ? AND ?
+      AND v.status = 'fechada'
+    GROUP BY hora ORDER BY hora
+  `).all(`${de} 00:00:00`, `${ate} 23:59:59`)
+
+  const resumoPeriodo = db.query<{ faturamento: number; qtd_vendas: number; ticket_medio: number }, [string, string]>(`
+    SELECT
+      COALESCE(SUM(total), 0) AS faturamento,
+      COUNT(*) AS qtd_vendas,
+      COALESCE(AVG(total), 0) AS ticket_medio
+    FROM venda
+    WHERE criado_em BETWEEN ? AND ? AND status = 'fechada'
+  `).get(`${de} 00:00:00`, `${ate} 23:59:59`)
+
+  return c.json({ de, ate, resumo: resumoPeriodo, top_produtos: topProdutos, por_hora: porHora })
+})
+
+// GET /api/dashboard/export/csv — export CSV do relatório (DSH-06)
+dashboardRoutes.get('/export/csv', (c) => {
+  const de  = c.req.query('de')  ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  const ate = c.req.query('ate') ?? new Date().toISOString().slice(0, 10)
+  const tipo = c.req.query('tipo') ?? 'top_produtos' // top_produtos | vendas
+
+  let csv = ''
+
+  if (tipo === 'top_produtos') {
+    const rows = db.query<Record<string, unknown>, [string, string]>(`
+      SELECT p.codigo, p.nome, p.categoria,
+        SUM(i.quantidade) AS qtd_vendida,
+        SUM(i.total) AS receita
+      FROM item_venda i
+      JOIN produto p ON p.id = i.produto_id
+      JOIN venda v   ON v.id = i.venda_id
+      WHERE v.criado_em BETWEEN ? AND ? AND v.status = 'fechada'
+      GROUP BY p.id ORDER BY receita DESC
+    `).all(`${de} 00:00:00`, `${ate} 23:59:59`)
+
+    csv = 'Codigo,Nome,Categoria,Qtd Vendida,Receita\n'
+    csv += (rows as any[]).map(r =>
+      `${r.codigo},"${r.nome}","${r.categoria ?? ''}",${r.qtd_vendida},${Number(r.receita).toFixed(2)}`
+    ).join('\n')
+  } else {
+    const rows = db.query<Record<string, unknown>, [string, string]>(`
+      SELECT numero, total, desconto, troco, forma_pagto, status, criado_em
+      FROM venda
+      WHERE criado_em BETWEEN ? AND ? AND status = 'fechada'
+      ORDER BY criado_em
+    `).all(`${de} 00:00:00`, `${ate} 23:59:59`)
+
+    csv = 'Numero,Total,Desconto,Troco,Forma Pagto,Status,Data\n'
+    csv += (rows as any[]).map(r =>
+      `${r.numero},${Number(r.total).toFixed(2)},${Number(r.desconto).toFixed(2)},${Number(r.troco).toFixed(2)},${r.forma_pagto},${r.status},${r.criado_em}`
+    ).join('\n')
+  }
+
+  c.header('Content-Type', 'text/csv; charset=utf-8')
+  c.header('Content-Disposition', `attachment; filename="athenas_${tipo}_${de}_${ate}.csv"`)
+  return c.body(csv)
+})
